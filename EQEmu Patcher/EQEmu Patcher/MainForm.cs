@@ -76,7 +76,7 @@ namespace EQEmu_Patcher
 
             filelistUrl = Assembly.GetExecutingAssembly().GetCustomAttribute<FileListUrl>().Value;
 #if DEBUG
-            filelistUrl = "https://github.com/xackery/eqemupatcher/releases/latest/download/";
+            filelistUrl = "https://github.com/crimsonknight2025/eqemupatcher2025/releases/latest/download/";
 #endif
             if (string.IsNullOrEmpty(filelistUrl))
             {
@@ -88,7 +88,7 @@ namespace EQEmu_Patcher
 
             patcherUrl = Assembly.GetExecutingAssembly().GetCustomAttribute<PatcherUrl>().Value;
 #if DEBUG
-            patcherUrl = "https://github.com/xackery/eqemupatcher/releases/latest/download/";
+            patcherUrl = "https://github.com/crimsonknight2025/eqemupatcher2025/releases/latest/download/";
 #endif
             if (string.IsNullOrEmpty(patcherUrl))
             {
