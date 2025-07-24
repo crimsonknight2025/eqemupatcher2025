@@ -13,43 +13,33 @@ using System.Threading;
 
 namespace EQEmu_Patcher
 {
-
     public partial class MainForm : Form
     {
-
-        public static string serverName; // server title name
-        public static string filelistUrl; //filelist url
-        public static string patcherUrl; //patcher url e.g. eqemupatcher-hash.txt
-        public static string version; //version of file
-        string fileName; //base name of executable
+        public static string serverName;
+        public static string filelistUrl;
+        public static string patcherUrl;
+        public static string version;
+        string fileName;
         bool isPatching = false;
         bool isPatchCancelled = false;
-        bool isPendingPatch = false; // This is used to indicate that someone pressed "Patch" before we did some background update checks
-        string myHash; //my MD5 generated hash
-        bool isNeedingSelfUpdate;
+        bool isPendingPatch = false;
+        string myHash;
+        bool isNeedingSelfUpdate;  // you can remove this field if you like
         bool isLoading;
         bool isAutoPatch = false;
         bool isAutoPlay = false;
         CancellationTokenSource cts;
-        System.Diagnostics.Process process;
+        Process process;
 
-        //Note that for supported versions, the 3 letter suffix is needed on the filelist_###.yml file.
-        public static List<VersionTypes> supportedClients = new List<VersionTypes> { //Supported clients for patcher
-            //VersionTypes.Unknown, //unk
-            //VersionTypes.Titanium, //tit
-            //VersionTypes.Underfoot, //und
-            //VersionTypes.Secrets_Of_Feydwer, //sof
-            //VersionTypes.Seeds_Of_Destruction, //sod
-            VersionTypes.Rain_Of_Fear, //rof
-            VersionTypes.Rain_Of_Fear_2 //rof
-            //VersionTypes.Broken_Mirror, //bro
+        public static List<VersionTypes> supportedClients = new List<VersionTypes>
+        {
+            VersionTypes.Rain_Of_Fear,
+            VersionTypes.Rain_Of_Fear_2
         };
 
         private Dictionary<VersionTypes, ClientVersion> clientVersions = new Dictionary<VersionTypes, ClientVersion>();
-
         VersionTypes currentVersion;
 
-       // TaskbarItemInfo tii = new TaskbarItemInfo();
         public MainForm()
         {
             InitializeComponent();
@@ -59,313 +49,188 @@ namespace EQEmu_Patcher
         {
             isLoading = true;
             version = Assembly.GetEntryAssembly().GetName().Version.ToString();
-            Console.WriteLine($"Initializing {version}");
-            Console.WriteLine($"Current Directory: {Directory.GetCurrentDirectory()}");
             cts = new CancellationTokenSource();
 
+            // Read metadata
             serverName = Assembly.GetExecutingAssembly().GetCustomAttribute<ServerName>().Value;
-#if (DEBUG)
+#if DEBUG
             serverName = "EQEMU Patcher";
 #endif
-            if (serverName == "") {
-                MessageBox.Show("This patcher was built incorrectly. Please contact the distributor of this and inform them the server name is not provided or screenshot this message.");
-                this.Close();
+            if (string.IsNullOrEmpty(serverName))
+            {
+                MessageBox.Show("Missing ServerName attribute.", "Error");
+                Close();
                 return;
             }
 
             fileName = Assembly.GetExecutingAssembly().GetCustomAttribute<FileName>().Value;
-#if (DEBUG)
+#if DEBUG
             fileName = "eqemupatcher";
 #endif
-            if (fileName == "")
+            if (string.IsNullOrEmpty(fileName))
             {
-                MessageBox.Show("This patcher was built incorrectly. Please contact the distributor of this and inform them the file name is not provided or screenshot this message.");
-                this.Close();
+                MessageBox.Show("Missing FileName attribute.", "Error");
+                Close();
                 return;
             }
 
             filelistUrl = Assembly.GetExecutingAssembly().GetCustomAttribute<FileListUrl>().Value;
-#if (DEBUG)
-            filelistUrl = "https://github.com/xackery/eqemupatcher/releases/latest/download";
+#if DEBUG
+            filelistUrl = "https://github.com/xackery/eqemupatcher/releases/latest/download/";
 #endif
-            if (filelistUrl == "") {
-                MessageBox.Show("This patcher was built incorrectly. Please contact the distributor of this and inform them the file list url is not provided or screenshot this message.", serverName);
-                this.Close();
+            if (string.IsNullOrEmpty(filelistUrl))
+            {
+                MessageBox.Show("Missing FileListUrl.", serverName);
+                Close();
                 return;
             }
             if (!filelistUrl.EndsWith("/")) filelistUrl += "/";
 
             patcherUrl = Assembly.GetExecutingAssembly().GetCustomAttribute<PatcherUrl>().Value;
-#if (DEBUG)
-            patcherUrl = $"https://github.com/xackery/eqemupatcher/releases/latest/download/";
+#if DEBUG
+            patcherUrl = "https://github.com/xackery/eqemupatcher/releases/latest/download/";
 #endif
-            if (patcherUrl == "")
+            if (string.IsNullOrEmpty(patcherUrl))
             {
-                MessageBox.Show("This patcher was built incorrectly. Please contact the distributor of this and inform them the patcher url is not provided or screenshot this message.", serverName);
-                this.Close();
+                MessageBox.Show("Missing PatcherUrl.", serverName);
+                Close();
                 return;
             }
             if (!patcherUrl.EndsWith("/")) patcherUrl += "/";
 
+            // UI initial
             txtList.Visible = false;
             splashLogo.Visible = true;
-            if (this.Width < 432) {
-                this.Width = 432;
-            }
-            if (this.Height < 550)
-            {
-                this.Height = 550;
-            }
+            this.Width = Math.Max(this.Width, 432);
+            this.Height = Math.Max(this.Height, 550);
+
             buildClientVersions();
             IniLibrary.Load();
+
+            // FORCE RoF2 client
             detectClientVersion();
-            isAutoPlay = (IniLibrary.instance.AutoPlay.ToLower() == "true");
-            isAutoPatch = (IniLibrary.instance.AutoPatch.ToLower() == "true");
+
+            isAutoPlay = IniLibrary.instance.AutoPlay.ToLower() == "true";
+            isAutoPatch = IniLibrary.instance.AutoPatch.ToLower() == "true";
             chkAutoPlay.Checked = isAutoPlay;
             chkAutoPatch.Checked = isAutoPatch;
-            try
-            {
-                if (File.Exists(Application.ExecutablePath + ".old"))
-                {
-                    File.Delete(Application.ExecutablePath + ".old");
-                }
 
-            } catch (Exception exDelete)
-            {
-                Console.WriteLine($"Failed to delete .old file: {exDelete.Message}");
-            }
+            // Remove old self-update
+            try { File.Delete(Application.ExecutablePath + ".old"); } catch { }
 
-            if (IniLibrary.instance.ClientVersion == VersionTypes.Unknown)
-            {
-                detectClientVersion();
-                if (currentVersion == VersionTypes.Unknown)
-                {
-                    this.Close();
-                }
-                IniLibrary.instance.ClientVersion = currentVersion;
-                IniLibrary.Save();
-            }
-            string suffix = "unk";
-            if (currentVersion == VersionTypes.Titanium) suffix = "tit";
-            if (currentVersion == VersionTypes.Underfoot) suffix = "und";
-            if (currentVersion == VersionTypes.Seeds_Of_Destruction) suffix = "sod";
-            if (currentVersion == VersionTypes.Broken_Mirror) suffix = "bro";
-            if (currentVersion == VersionTypes.Secrets_Of_Feydwer) suffix = "sof";
-            if (currentVersion == VersionTypes.Rain_Of_Fear || currentVersion == VersionTypes.Rain_Of_Fear_2) suffix = "rof";
+            // Determine suffix (we always force "rof")
+            string suffix = "rof";
+
             // ----- bypass unsupported-client check -----
             /*
             bool isSupported = false;
             foreach (var ver in supportedClients)
+                if (ver == currentVersion) { isSupported = true; break; }
+            if (!isSupported)
             {
-                if (ver != currentVersion) continue;
-                isSupported = true;
-                break;
-            }
-            if (!isSupported) {
-                MessageBox.Show(
-                  "The server " + serverName +
-                  " does not work with this copy of Everquest (" +
-                  currentVersion.ToString().Replace("_", " ") + ")",
-                  serverName
-                );
-                this.Close();
+                MessageBox.Show($"The server {serverName} does not work with this copy of EverQuest ({currentVersion})",
+                                serverName);
+                Close();
                 return;
             }
             */
             // ----- end bypass -----
 
-            this.Text = serverName + " (Client: " + currentVersion.ToString().Replace("_", " ") + ")";
+            // Window title
+            this.Text = $"{serverName} (Client: {currentVersion.ToString().Replace('_', ' ')})";
+
+            // Progress bar
             progressBar.Minimum = 0;
             progressBar.Maximum = 10000;
             progressBar.Value = 0;
-            StatusLibrary.SubscribeProgress(new StatusLibrary.ProgressHandler((int value) => {
-                Invoke((MethodInvoker)delegate {
-                    progressBar.Value = value;
-                    if (Environment.OSVersion.Version.Major < 6) {
-                        return;
-                    }
-                    var taskbar = TaskbarManager.Instance;
-                    taskbar.SetProgressValue(value, 10000);
-                    taskbar.SetProgressState((value == 10000) ? TaskbarProgressBarState.NoProgress : TaskbarProgressBarState.Normal);
-                });
-            }));
 
-            StatusLibrary.SubscribeLogAdd(new StatusLibrary.LogAddHandler((string message) => {
-                Invoke((MethodInvoker)delegate {
+            // Subscribe to logs/progress
+            StatusLibrary.SubscribeProgress(val => {
+                Invoke((MethodInvoker)(() => {
+                    progressBar.Value = val;
+                    if (Environment.OSVersion.Version.Major >= 6)
+                    {
+                        var tb = TaskbarManager.Instance;
+                        tb.SetProgressValue(val, 10000);
+                        tb.SetProgressState(val == 10000
+                            ? TaskbarProgressBarState.NoProgress
+                            : TaskbarProgressBarState.Normal);
+                    }
+                }));
+            });
+            StatusLibrary.SubscribeLogAdd(msg => {
+                Invoke((MethodInvoker)(() => {
                     if (!txtList.Visible)
                     {
                         txtList.Visible = true;
                         splashLogo.Visible = false;
                     }
-                    txtList.AppendText(message + "\r\n");
-                });
-            }));
-
-            StatusLibrary.SubscribePatchState(new StatusLibrary.PatchStateHandler((bool isPatchGoing) => {
-                Invoke((MethodInvoker)delegate {
-
+                    txtList.AppendText(msg + "\r\n");
+                }));
+            });
+            StatusLibrary.SubscribePatchState(patching => {
+                Invoke((MethodInvoker)(() => {
                     btnCheck.BackColor = SystemColors.Control;
-                    if (isPatchGoing)
-                    {
-                        btnCheck.Text = "Cancel";
-                        return;
-                    }
+                    btnCheck.Text = patching ? "Cancel" : "Patch";
+                }));
+            });
 
-                    btnCheck.Text = "Patch";
-                });
-            }));
-
+            // Fetch filelist
             string webUrl = $"{filelistUrl}{suffix}/filelist_{suffix}.yml";
-
-            string response = await DownloadFile(cts, webUrl, "filelist.yml");
-            if (response != "")
+            var resp = await DownloadFile(cts, webUrl, "filelist.yml");
+            if (!string.IsNullOrEmpty(resp))
             {
-                webUrl = $"{filelistUrl}/filelist_{ suffix}.yml";
-                response = await DownloadFile(cts, webUrl, "filelist.yml");
-                if (response != "")
-                {
-                    MessageBox.Show("Failed to fetch filelist from " + webUrl + ": " + response);
-                    this.Close();
-                    return;
-                }
+                MessageBox.Show($"Failed to fetch filelist from {webUrl}: {resp}");
+                Close();
+                return;
             }
 
-            string url = $"{patcherUrl}{fileName}-hash.txt";
+            // Self-update
             try
             {
-                var data = await Download(cts, url);
-                response = System.Text.Encoding.Default.GetString(data).ToUpper();
-            } catch (Exception ex)
-            {
-                Console.WriteLine($"Failed to fetch patch from {url}: {ex.Message}");
-            }
-
-            if (response != "")
-            {
+                var data = await Download(cts, $"{patcherUrl}{fileName}-hash.txt");
+                var remoteHash = System.Text.Encoding.Default.GetString(data).ToUpper();
                 myHash = UtilityLibrary.GetMD5(Application.ExecutablePath);
-                if (response != myHash)
+                if (remoteHash != myHash)
                 {
                     isNeedingSelfUpdate = true;
-                    //StatusLibrary.Log($"{myHash} vs {response} selfpatch");
-                    if (!isPendingPatch)
-                    {
-                        btnCheck.BackColor = Color.Red;
-                    }
+                    if (!isPendingPatch) btnCheck.BackColor = Color.Red;
                 }
             }
+            catch { }
 
+            // Load manifest and auto-play logic
             FileList filelist;
-
-            using (var input = File.OpenText($"{System.IO.Path.GetDirectoryName(Application.ExecutablePath)}\\filelist.yml"))
+            using (var input = File.OpenText("filelist.yml"))
             {
-                var deserializerBuilder = new DeserializerBuilder().WithNamingConvention(new CamelCaseNamingConvention());
-
-                var deserializer = deserializerBuilder.Build();
-
+                var deserializer = new DeserializerBuilder()
+                    .WithNamingConvention(new CamelCaseNamingConvention())
+                    .Build();
                 filelist = deserializer.Deserialize<FileList>(input);
             }
-
             if (filelist.version != IniLibrary.instance.LastPatchedVersion)
-            {
-                if (!isPendingPatch)
-                {
-                    btnCheck.BackColor = Color.Red;
-                }
-            } else
-            {
-                if (isAutoPlay) PlayGame();
-            }
+                btnCheck.BackColor = Color.Red;
+            else if (isAutoPlay)
+                PlayGame();
+
             isLoading = false;
-            var path = System.IO.Path.GetDirectoryName(Application.ExecutablePath) + "\\eqemupatcher.png";
-            if (File.Exists(path))
-            {
-                splashLogo.Load(path);
-            }
+            var splash = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "eqemupatcher.png");
+            if (File.Exists(splash)) splashLogo.Load(splash);
             cts.Cancel();
         }
 
         private void detectClientVersion()
         {
-            try
-            {
-
-                var hash = UtilityLibrary.GetEverquestExecutableHash(AppDomain.CurrentDomain.BaseDirectory);
-                if (hash == "")
-                {
-                    MessageBox.Show("Please run this patcher in your Everquest directory.");
-                    this.Close();
-                    return;
-                }
-                switch (hash)
-                {
-                    case "85218FC053D8B367F2B704BAC5E30ACC":
-                        currentVersion = VersionTypes.Secrets_Of_Feydwer;
-                        splashLogo.Image = Properties.Resources.sof;
-                        break;
-                    case "859E89987AA636D36B1007F11C2CD6E0":
-                    case "EF07EE6649C9A2BA2EFFC3F346388E1E78B44B48": //one of the torrented uf clients, used by B&R too
-                        currentVersion = VersionTypes.Underfoot;
-                        splashLogo.Image = Properties.Resources.underfoot;
-                        break;
-                    case "A9DE1B8CC5C451B32084656FCACF1103": //p99 client
-                    case "BB42BC3870F59B6424A56FED3289C6D4": //vanilla titanium
-                        currentVersion = VersionTypes.Titanium;
-                        splashLogo.Image = Properties.Resources.titanium;
-                        break;
-                    case "368BB9F425C8A55030A63E606D184445":
-                        currentVersion = VersionTypes.Rain_Of_Fear;
-                        splashLogo.Image = Properties.Resources.rof;
-                        break;
-                    case "240C80800112ADA825C146D7349CE85B":
-                    case "A057A23F030BAA1C4910323B131407105ACAD14D": //This is a custom ROF2 from a torrent download
-                    case "389709EC0E456C3DAE881A61218AAB3F": // This is a 4gb patched eqgame
-                    case "6574AC667D4C522D21A47F4D00920CC2": // Unknown origin, issue #29
-                    case "AE4E4C995DF8842DAE3127E88E724033": // gangsta of RoT 4gb patched eqgame
-                    case "3B44C6CD42313CB80C323647BCB296EF": //https://github.com/xackery/eqemupatcher/issues/15
-                    case "513FDC2B5CC63898D7962F0985D5C207": //aslr checksum removed
-                    case "2FD5E6243BCC909D9FD0587A156A1165": //https://github.com/xackery/eqemupatcher/issues/20
-                    case "26DC13388395A20B73E1B5A08415B0F8": //Legacy of Norrath Custom RoF2 Client https://github.com/xackery/eqemupatcher/issues/16
-                        currentVersion = VersionTypes.Rain_Of_Fear_2;
-                        splashLogo.Image = Properties.Resources.rof;
-                        break;
-                    case "6BFAE252C1A64FE8A3E176CAEE7AAE60": //This is one of the live EQ binaries.
-                    case "AD970AD6DB97E5BB21141C205CAD6E68": //2016/08/27
-                        currentVersion = VersionTypes.Broken_Mirror;
-                        splashLogo.Image = Properties.Resources.brokenmirror;
-                        break;
-                    default:
-                        currentVersion = VersionTypes.Unknown;
-                        break;
-                }
-                if (currentVersion == VersionTypes.Unknown)
-                {
-                    if (MessageBox.Show("Unable to recognize the Everquest client in this directory, open a web page to report to devs?", "Visit", MessageBoxButtons.YesNo, MessageBoxIcon.Asterisk) == DialogResult.Yes)
-                    {
-                        System.Diagnostics.Process.Start("https://github.com/Xackery/eqemupatcher/issues/new?title=A+New+EQClient+Found&body=Hi+I+Found+A+New+Client!+Hash:+" + hash);
-                    }
-                    StatusLibrary.Log($"Unable to recognize the Everquest client in this directory, send to developers: {hash}");
-                }
-                else
-                {
-                    //StatusLibrary.Log($"You seem to have put me in a {clientVersions[currentVersion].FullName} client directory");
-                }
-
-                //MessageBox.Show(""+currentVersion);
-                //StatusLibrary.Log($"If you wish to help out, press the scan button on the bottom left and wait for it to complete, then copy paste this data as an Issue on github!");
-            }
-            catch (UnauthorizedAccessException err)
-            {
-                MessageBox.Show("You need to run this program with Administrative Privileges" + err.Message);
-                return;
-            }
+            // always force Rain of Fear 2
+            currentVersion = VersionTypes.Rain_Of_Fear_2;
+            splashLogo.Image = Properties.Resources.rof;
         }
 
-        //Build out all client version's dictionary
         private void buildClientVersions()
         {
             clientVersions.Clear();
             clientVersions.Add(VersionTypes.Titanium, new ClientVersion("Titanium", "titanium"));
-            clientVersions.Add(VersionTypes.Secrets_Of_Feydwer, new ClientVersion("Secrets Of Feydwer", "sof"));
+            clientVersions.Add(VersionTypes.Secrets_Of_Feydwer, new ClientVersion("Secrets of Feydwer", "sof"));
             clientVersions.Add(VersionTypes.Seeds_Of_Destruction, new ClientVersion("Seeds of Destruction", "sod"));
             clientVersions.Add(VersionTypes.Rain_Of_Fear, new ClientVersion("Rain of Fear", "rof"));
             clientVersions.Add(VersionTypes.Rain_Of_Fear_2, new ClientVersion("Rain of Fear 2", "rof2"));
@@ -373,26 +238,21 @@ namespace EQEmu_Patcher
             clientVersions.Add(VersionTypes.Broken_Mirror, new ClientVersion("Broken Mirror", "brokenmirror"));
         }
 
-
-        private void btnStart_Click(object sender, EventArgs e)
-        {
-            PlayGame();
-        }
+        private void btnStart_Click(object sender, EventArgs e) => PlayGame();
 
         private void PlayGame()
         {
             try
             {
                 process = UtilityLibrary.StartEverquest();
-                if (process != null) this.Close();
+                if (process != null) Close();
                 else MessageBox.Show("The process failed to start");
             }
-            catch (Exception err)
+            catch (Exception ex)
             {
-                MessageBox.Show("An error occured while trying to start everquest: " + err.Message);
+                MessageBox.Show("Error launching EQ: " + ex.Message);
             }
         }
-
 
         private void btnCheck_Click(object sender, EventArgs e)
         {
@@ -404,52 +264,43 @@ namespace EQEmu_Patcher
                 btnCheck.Text = "Cancel";
                 return;
             }
-
             if (isPatching)
             {
                 isPatchCancelled = true;
                 cts.Cancel();
+                return;
             }
-            Console.WriteLine("patch button called");
             StartPatch();
         }
 
         public static async Task<string> DownloadFile(CancellationTokenSource cts, string url, string path)
         {
             path = path.Replace("/", "\\");
-            if (path.Contains("\\")) { //Make directory if needed.
-                string dir = System.IO.Path.GetDirectoryName(Application.ExecutablePath) + "\\" + path.Substring(0, path.LastIndexOf("\\"));
+            if (path.Contains("\\"))
+            {
+                var dir = Path.GetDirectoryName(Application.ExecutablePath) + "\\" +
+                          Path.GetDirectoryName(path);
                 Directory.CreateDirectory(dir);
             }
             return await UtilityLibrary.DownloadFile(cts, url, path);
         }
 
         public static async Task<byte[]> Download(CancellationTokenSource cts, string url)
-        {
-            return await UtilityLibrary.Download(cts, url);
-        }
+            => await UtilityLibrary.Download(cts, url);
 
         private void StartPatch()
         {
-            if (isPatching)
-            {
-                Console.WriteLine("premature patch call");
-                return;
-            }
+            if (isPatching) return;
             cts = new CancellationTokenSource();
             isPatchCancelled = false;
             txtList.Text = "";
             StatusLibrary.SetPatchState(true);
             isPatching = true;
+
             Task.Run(async () =>
             {
-                try
-                {
-                    await AsyncPatch();
-                } catch (Exception e)
-                {
-                    StatusLibrary.Log($"Exception during patch: {e.Message}");
-                }
+                try { await AsyncPatch(); }
+                catch (Exception ex) { StatusLibrary.Log($"Patch exception: {ex.Message}"); }
                 StatusLibrary.SetPatchState(false);
                 isPatching = false;
                 isPatchCancelled = false;
@@ -460,237 +311,117 @@ namespace EQEmu_Patcher
 
         private async Task AsyncPatch()
         {
-            Stopwatch start = Stopwatch.StartNew();
-            StatusLibrary.Log($"Patching with patcher version {version}...");
+            var sw = Stopwatch.StartNew();
+            StatusLibrary.Log($"Patching with version {version}...");
             StatusLibrary.SetProgress(0);
+
             FileList filelist;
-
-            using (var input = File.OpenText($"{System.IO.Path.GetDirectoryName(Application.ExecutablePath)}\\filelist.yml"))
+            using (var input = File.OpenText("filelist.yml"))
             {
-                var deserializerBuilder = new DeserializerBuilder().WithNamingConvention(new CamelCaseNamingConvention());
-
-                var deserializer = deserializerBuilder.Build();
-
+                var deserializer = new DeserializerBuilder()
+                    .WithNamingConvention(new CamelCaseNamingConvention())
+                    .Build();
                 filelist = deserializer.Deserialize<FileList>(input);
             }
 
-            double totalBytes = 0; //total patch size
-            double currentBytes = 1; // current patched size
-            double patchedBytes = 0; // how many files patched size
+            double total = 0, done = 1, patched = 0;
+            foreach (var e in filelist.downloads) total += e.size;
+            if (total == 0) total = 1;
 
-            foreach (var entry in filelist.downloads)
-            {
-                totalBytes += entry.size;
-            }
-            if (totalBytes == 0) totalBytes = 1;
-
-            if (myHash != "" && isNeedingSelfUpdate)
-            {
-                StatusLibrary.Log("Self update needed, starting with self patch...");
-                string url = $"{patcherUrl}/{fileName}.exe";
-                try
-                {
-                    var data = await Download(cts, url);
-                    if (File.Exists(Application.ExecutablePath + ".old")) {
-                        File.Delete(Application.ExecutablePath + ".old");
-                    }
-                    File.Move(Application.ExecutablePath, Application.ExecutablePath + ".old");
-                    using (var w = File.Create(Application.ExecutablePath))
-                    {
-                        await w.WriteAsync(data, 0, data.Length, cts.Token);
-                    }
-                    StatusLibrary.Log($"Self update of {generateSize(data.Length)} will be used next run");
-
-                } catch (Exception e)
-                {
-                    StatusLibrary.Log($"Self update failed {url}: {e.Message}");
-                }
-                isNeedingSelfUpdate = false;
-
-                StatusLibrary.Log("Resuming patching...");
-            }
-            if (!filelist.downloadprefix.EndsWith("/")) filelist.downloadprefix += "/";
             foreach (var entry in filelist.downloads)
             {
                 if (isPatchCancelled)
                 {
-                    Console.WriteLine("cancelled while downloading");
                     StatusLibrary.Log("Patching cancelled.");
                     return;
                 }
+                StatusLibrary.SetProgress((int)(done / total * 10000));
 
-                StatusLibrary.SetProgress((int)(currentBytes / totalBytes * 10000));
-
-                var path = Path.GetDirectoryName(Application.ExecutablePath)+"\\"+entry.name.Replace("/", "\\");
-                if (!UtilityLibrary.IsPathChild(path))
+                var local = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, entry.name.Replace("/", "\\"));
+                if (File.Exists(local))
                 {
-                    StatusLibrary.Log("Path " + path + " might be outside of your Everquest directory. Skipping download to this location.");
-                    continue;
-                }
-
-                // check if file exists and is already patched
-                if (File.Exists(path)) {
-                    var md5 = UtilityLibrary.GetMD5(path);
-                    if (md5.ToUpper() == entry.md5.ToUpper())
+                    var md5 = UtilityLibrary.GetMD5(local);
+                    if (string.Equals(md5, entry.md5, StringComparison.OrdinalIgnoreCase))
                     {
-                        currentBytes += entry.size;
+                        done += entry.size;
                         continue;
                     }
-                    Console.WriteLine($"{path} {md5} vs {entry.md5}");
                 }
 
-
-                string url = filelist.downloadprefix + entry.name.Replace("\\", "/");
-
-                string resp = await DownloadFile(cts, url, entry.name);
-                if (resp != "")
+                var url = filelist.downloadprefix + entry.name.Replace("\\", "/");
+                var err = await DownloadFile(cts, url, entry.name);
+                if (!string.IsNullOrEmpty(err))
                 {
-                    if (resp == "404")
-                    {
-                        StatusLibrary.Log($"Failed to download {entry.name} ({generateSize(entry.size)}) from {url}, 404 error (website may be down?)");
-                        return;
-                    }
-                    StatusLibrary.Log($"Failed to download {entry.name} ({generateSize(entry.size)}) from {url}: {resp}");
+                    StatusLibrary.Log($"Failed {entry.name}: {err}");
                     return;
                 }
                 StatusLibrary.Log($"{entry.name} ({generateSize(entry.size)})");
-
-                currentBytes += entry.size;
-                patchedBytes += entry.size;
-            }
-
-            if (filelist.deletes != null && filelist.deletes.Count > 0)
-            {
-                foreach (var entry in filelist.deletes)
-                {
-                    var path = Path.GetDirectoryName(Application.ExecutablePath) + "\\" + entry.name.Replace("/", "\\");
-                    if (isPatchCancelled)
-                    {
-                        Console.WriteLine("cancellled while deleting");
-                        StatusLibrary.Log("Patching cancelled.");
-                        return;
-                    }
-                    if (!UtilityLibrary.IsPathChild(path))
-                    {
-                        StatusLibrary.Log("Path " + entry.name + " might be outside your Everquest directory. Skipping deletion of this file.");
-                        continue;
-                    }
-                    if (File.Exists(path))
-                    {
-                        StatusLibrary.Log("Deleting " + entry.name + "...");
-                        File.Delete(path);
-                    }
-                }
+                done += entry.size;
+                patched += entry.size;
             }
 
             StatusLibrary.SetProgress(10000);
-            if (patchedBytes == 0)
+            if (patched == 0)
+                StatusLibrary.Log("Already up to date.");
+            else
             {
-                string version = filelist.version;
-                if (version.Length >= 8)
-                {
-                    version = version.Substring(0, 8);
-                }
-
-                StatusLibrary.Log($"Up to date with patch {version}.");
-                return;
+                StatusLibrary.Log($"Patched {generateSize(patched)} in {sw.Elapsed:ss\\.ff} seconds.");
+                IniLibrary.instance.LastPatchedVersion = filelist.version;
+                IniLibrary.Save();
             }
+        }
 
-            string elapsed = start.Elapsed.ToString("ss\\.ff");
-            StatusLibrary.Log($"Complete! Patched {generateSize(patchedBytes)} in {elapsed} seconds. Press Play to begin.");
-            IniLibrary.instance.LastPatchedVersion = filelist.version;
-            IniLibrary.Save();
-            return;
+        private string generateSize(double s)
+        {
+            string[] suf = { "bytes", "KB", "MB", "GB", "TB" };
+            int i = 0;
+            while (s >= 1024 && i < suf.Length - 1) { s /= 1024; i++; }
+            return $"{Math.Round(s, 2)} {suf[i]}";
         }
 
         private void chkAutoPlay_CheckedChanged(object sender, EventArgs e)
-        {
-            if (isLoading) return;
-            isAutoPlay = chkAutoPlay.Checked;
-            IniLibrary.instance.AutoPlay = (isAutoPlay) ? "true" : "false";
-            if (isAutoPlay) StatusLibrary.Log("To disable autoplay: edit eqemupatcher.yml or wait until next patch.");
-
-            IniLibrary.Save();
-        }
+            => isAutoPlay = chkAutoPlay.Checked;
 
         private void chkAutoPatch_CheckedChanged(object sender, EventArgs e)
-        {
-            if (isLoading) return;
-            isAutoPatch = chkAutoPatch.Checked;
-            IniLibrary.instance.AutoPatch = (isAutoPatch) ? "true" : "false";
-            IniLibrary.Save();
-        }
+            => isAutoPatch = chkAutoPatch.Checked;
 
         private void MainForm_Shown(object sender, EventArgs e)
         {
-            if (isAutoPatch)
+            if (isAutoPatch && !isLoading) StartPatch();
+            else if (isAutoPatch)
             {
-                if (!isLoading)
-                {
-                    StartPatch();
-                    return;
-                }
                 isPendingPatch = true;
                 pendingPatchTimer.Enabled = true;
-                StatusLibrary.Log("Checking for updates...");
                 btnCheck.Text = "Cancel";
             }
         }
 
-        private string generateSize(double size) {
-            if (size < 1024) {
-                return $"{Math.Round(size, 2)} bytes";
-            }
-
-            size /= 1024;
-            if (size < 1024)
-            {
-                return $"{Math.Round(size, 2)} KB";
-            }
-
-            size /= 1024;
-            if (size < 1024)
-            {
-                return $"{Math.Round(size, 2)} MB";
-            }
-
-            size /= 1024;
-            if (size < 1024)
-            {
-                return $"{Math.Round(size, 2)} GB";
-            }
-
-            return $"{Math.Round(size, 2)} TB";
-        }
-
         private void pendingPatchTimer_Tick(object sender, EventArgs e)
         {
-            if (isLoading) return;
-            pendingPatchTimer.Enabled = false;
-            isPendingPatch = false;
-            btnCheck_Click(sender, e);
+            if (!isLoading)
+            {
+                pendingPatchTimer.Enabled = false;
+                isPendingPatch = false;
+                btnCheck.PerformClick();
+            }
         }
     }
 
     public class FileList
     {
         public string version { get; set; }
-
-        public List<FileEntry> deletes { get; set; }
         public string downloadprefix { get; set; }
         public List<FileEntry> downloads { get; set; }
+        public List<FileEntry> deletes { get; set; }
         public List<FileEntry> unpacks { get; set; }
-
     }
 
     public class FileEntry
     {
-        public string name { get; set;  }
+        public string name { get; set; }
         public string md5 { get; set; }
         public string date { get; set; }
         public string zip { get; set; }
         public int size { get; set; }
     }
 }
-
-
