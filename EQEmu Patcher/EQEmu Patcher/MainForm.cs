@@ -152,7 +152,8 @@ namespace EQEmu_Patcher
             if (currentVersion == VersionTypes.Broken_Mirror) suffix = "bro";
             if (currentVersion == VersionTypes.Secrets_Of_Feydwer) suffix = "sof";
             if (currentVersion == VersionTypes.Rain_Of_Fear || currentVersion == VersionTypes.Rain_Of_Fear_2) suffix = "rof";
-
+            // ----- bypass unsupported-client check -----
+            /*
             bool isSupported = false;
             foreach (var ver in supportedClients)
             {
@@ -161,10 +162,17 @@ namespace EQEmu_Patcher
                 break;
             }
             if (!isSupported) {
-                MessageBox.Show("The server " + serverName + " does not work with this copy of Everquest (" + currentVersion.ToString().Replace("_", " ") + ")", serverName);
+                MessageBox.Show(
+                  "The server " + serverName +
+                  " does not work with this copy of Everquest (" +
+                  currentVersion.ToString().Replace("_", " ") + ")",
+                  serverName
+                );
                 this.Close();
                 return;
             }
+            */
+            // ----- end bypass -----
 
             this.Text = serverName + " (Client: " + currentVersion.ToString().Replace("_", " ") + ")";
             progressBar.Minimum = 0;
